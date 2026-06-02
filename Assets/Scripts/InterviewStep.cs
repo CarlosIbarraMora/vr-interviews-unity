@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEditor.Animations;
 using System;
 
-public class InterviewStep : MonoBehaviour
+public class InterviewStep
 {
     private int duration;
     private string animatorControllerPath;
@@ -31,13 +31,15 @@ public class InterviewStep : MonoBehaviour
 
     public AudioClip getAudioClip(){
         string path = interview.getBasePath() + "/Audio/" + audioClipPath;
-        print("loading from path: " + path);
+        Debug.Log("loading from path: " + path);
         return Resources.Load<AudioClip>(path);
     }
 
     public AnimatorController getAnimatorController(){
         string path = interview.getBasePath() + "/Animations/" + animatorControllerPath;
-        print("loading from path: " + path);
+        Debug.Log("loading from path: " + path);
         return Resources.Load<AnimatorController>(path);
     }
+
+    
 }

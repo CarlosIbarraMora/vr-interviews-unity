@@ -71,7 +71,7 @@ public static class SavWav
 
         samples.RemoveRange(i, samples.Count - i);
 
-        var clip = AudioClip.Create("TempClip", samples.Count, channels, hz, _3D, stream);
+        var clip = AudioClip.Create("TempClip", samples.Count, channels, hz, stream);
 
         clip.SetData(samples.ToArray(), 0);
 
