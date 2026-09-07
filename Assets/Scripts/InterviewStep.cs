@@ -30,7 +30,7 @@ public class InterviewStep
     }
 
     public AudioClip getAudioClip(){
-        string path = interview.getBasePath() + "/Audio/" + audioClipPath;
+        string path = interview.getBasePath() + "/Audio/NewAudios/" + audioClipPath;
         Debug.Log("loading from path: " + path);
         return Resources.Load<AudioClip>(path);
     }

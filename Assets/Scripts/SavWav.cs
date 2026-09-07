@@ -24,7 +24,6 @@ public static class SavWav
 
         using (var fileStream = CreateEmpty(filepath))
         {
-             
             ConvertAndWrite(fileStream, clip);
 
             WriteHeader(fileStream, clip);
