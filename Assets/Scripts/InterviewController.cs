@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -8,26 +9,42 @@ public class InterviewController : MonoBehaviour
     private AudioSource audioSource;
     private AudioSource recordSource;
 
-    private int cont; // Contador para nombrar las grabaciones.
+    private int cont;
 
-    // Animaciones disponibles para cada estado del entrevistador.
-    private string[] talkingAnimations =
-    {"talking1", "talking2", "talking3", "talking4", "talking5" };
+    private readonly string[] talkingAnimations =
+    {
+        "talking1",
+        "talking2",
+        "talking3",
+        "talking4",
+        "talking5"
+    };
 
-    private string[] listeningAnimations =
-    { "listeningIdle1", "listeningIdle2", "listeningIdle3", "listeningIdle4", "listeningIdle5" };
+    private readonly string[] listeningAnimations =
+    {
+        "listeningIdle1",
+        "listeningIdle2",
+        "listeningIdle3",
+        "listeningIdle4",
+        "listeningIdle5"
+    };
 
-    // Setup para conservar posicion y orientacion del modelo.
     private Transform interviewerTransform;
     private Vector3 originalPosition;
     private Quaternion originalRotation;
 
+    // Estado general de la entrevista
+    private bool introductionFinished = false;
+    private bool interviewReady = false;
     private bool interviewFinished = false;
+    private bool startInterviewRequested = false;
+    private bool questionInProgress = false;
+
+    // Estado de grabacion
     private bool isRecording = false;
+    private bool finishAnswerRequested = false;
     private string currentRecordDevice;
 
-    // Tiempo maximo disponible para una respuesta.
-    // La respuesta tambien puede terminar antes presionando ESPACIO o ENTER.
     private int maxWait = 20;
 
     [Header("Wizard of Oz - Preguntas")]
@@ -35,36 +52,70 @@ public class InterviewController : MonoBehaviour
     public List<InterviewQuestion> questions = new List<InterviewQuestion>();
 
     private int selectedQuestionIndex = 0;
-    private bool interviewReady = false;
-    private bool questionInProgress = false;
 
-    void Start()
+    // ============================================================
+    // EVENTOS PARA LA UI
+    // ============================================================
+
+    public event Action OnIntroductionFinished;
+    public event Action OnInterviewReady;
+    public event Action OnQuestionStarted;
+    public event Action OnAnswerStarted;
+    public event Action OnQuestionFinished;
+    public event Action OnInterviewFinished;
+
+    // ============================================================
+    // START
+    // ============================================================
+
+    private void Start()
     {
-        GameObject interviewer = GameObject.FindGameObjectWithTag("Interviewer");
+        GameObject interviewer =
+            GameObject.FindGameObjectWithTag("Interviewer");
 
         if (interviewer == null)
         {
-            Debug.LogError("No se encontro un GameObject con el tag 'Interviewer'.");
+            Debug.LogError(
+                "No se encontro un GameObject con el tag 'Interviewer'."
+            );
             return;
         }
 
-        // Inicializacion de componentes del entrevistador.
         interviewerTransform = interviewer.transform;
         animator = interviewer.GetComponent<Animator>();
         audioSource = interviewer.GetComponent<AudioSource>();
         recordSource = interviewer.GetComponent<AudioSource>();
 
+        if (animator == null)
+        {
+            Debug.LogWarning(
+                "El entrevistador no tiene Animator."
+            );
+        }
+
+        if (audioSource == null)
+        {
+            Debug.LogError(
+                "El entrevistador no tiene AudioSource."
+            );
+            return;
+        }
+
         cont = 1;
 
-        // Se guarda la posicion y rotacion original del entrevistador.
-        originalPosition = interviewerTransform.position;
-        originalRotation = interviewerTransform.rotation;
+        originalPosition =
+            interviewerTransform.position;
 
-        // La introduccion se conserva como antes:
-        // 1) reproduce Intro 1
-        // 2) pasa a escucha y espera a que el operador presione ESPACIO/ENTER
-        // IMPORTANTE: Intro 1 ahora se carga desde la carpeta OldAudios.
-        Interview introInterview = new Interview("1 To 1", "personal");
+        originalRotation =
+            interviewerTransform.rotation;
+
+        // Introduccion inicial
+        Interview introInterview =
+            new Interview(
+                "1 To 1",
+                "personal"
+            );
+
         introInterview.addStep(
             new InterviewStep(
                 GetRandomAnimation(talkingAnimations),
@@ -82,312 +133,729 @@ public class InterviewController : MonoBehaviour
             )
         );
 
-        Debug.Log("Starting interview introduction...");
-        StartCoroutine(RunIntroduction(introInterview));
+        Debug.Log(
+            "Iniciando introduccion..."
+        );
+
+        StartCoroutine(
+            RunIntroduction(introInterview)
+        );
     }
 
-    void Update()
+    // ============================================================
+    // UPDATE
+    // ============================================================
+
+    private void Update()
     {
-         // ESC puede terminar la entrevista en cualquier momento.
+        // ESC se conserva como respaldo durante desarrollo.
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             EndInterview();
-            return;
-        }
-
-        // Si la entrevista ya terminó, ignoramos cualquier otro control.
-        if (interviewFinished)
-        {
-            return;
-        }
-
-        // Hasta que termine la introduccion, el operador no puede seleccionar preguntas.
-        if (!interviewReady || questionInProgress || questions.Count == 0)
-        {
-            return;
-        }
-
-        // Flecha abajo: siguiente pregunta.
-        if (Input.GetKeyDown(KeyCode.DownArrow))
-        {
-            selectedQuestionIndex = (selectedQuestionIndex + 1) % questions.Count;
-            PrintSelectedQuestion();
-        }
-
-        // Flecha arriba: pregunta anterior.
-        if (Input.GetKeyDown(KeyCode.UpArrow))
-        {
-            selectedQuestionIndex--;
-
-            if (selectedQuestionIndex < 0)
-            {
-                selectedQuestionIndex = questions.Count - 1;
-            }
-
-            PrintSelectedQuestion();
-        }
-
-        // ENTER reproduce la pregunta seleccionada.
-        if (Input.GetKeyDown(KeyCode.Return))
-        {
-            InterviewQuestion selectedQuestion = questions[selectedQuestionIndex];
-
-            if (selectedQuestion.audioClip == null)
-            {
-                Debug.LogWarning(
-                    "La pregunta " + selectedQuestion.id +
-                    " no tiene AudioClip asignado."
-                );
-                return;
-            }
-
-            StartCoroutine(AskQuestion(selectedQuestion));
         }
     }
 
-    // Ejecuta solamente la introduccion inicial y la espera de preparacion.
-    private IEnumerator RunIntroduction(Interview interview)
+    // ============================================================
+    // INICIAR ENTREVISTA
+    // ============================================================
+
+    public bool StartInterview()
     {
-        List<InterviewStep> steps = interview.getSteps();
+        if (interviewFinished)
+        {
+            Debug.LogWarning(
+                "La entrevista ya termino."
+            );
+            return false;
+        }
+
+        if (!introductionFinished)
+        {
+            Debug.LogWarning(
+                "La introduccion todavia no ha terminado."
+            );
+            return false;
+        }
+
+        if (interviewReady)
+        {
+            Debug.LogWarning(
+                "La entrevista ya fue iniciada."
+            );
+            return false;
+        }
+
+        startInterviewRequested = true;
+
+        Debug.Log(
+            "El operador solicito iniciar la entrevista."
+        );
+
+        return true;
+    }
+
+    // ============================================================
+    // SELECCIONAR PREGUNTA
+    // ============================================================
+
+    public bool SelectQuestion(int questionNumber)
+    {
+        if (interviewFinished)
+        {
+            Debug.LogWarning(
+                "La entrevista ya termino."
+            );
+            return false;
+        }
+
+        if (!interviewReady)
+        {
+            Debug.LogWarning(
+                "La entrevista todavia no esta lista."
+            );
+            return false;
+        }
+
+        if (questionInProgress)
+        {
+            Debug.LogWarning(
+                "Hay una pregunta en progreso."
+            );
+            return false;
+        }
+
+        if (questions.Count == 0)
+        {
+            Debug.LogWarning(
+                "No hay preguntas configuradas."
+            );
+            return false;
+        }
+
+        int index = questionNumber - 1;
+
+        if (index < 0 || index >= questions.Count)
+        {
+            Debug.LogWarning(
+                "Pregunta invalida. Selecciona un numero entre 1 y "
+                + questions.Count
+                + "."
+            );
+
+            return false;
+        }
+
+        selectedQuestionIndex = index;
+
+        PrintSelectedQuestion();
+
+        return true;
+    }
+
+    // ============================================================
+    // REALIZAR PREGUNTA
+    // ============================================================
+
+    public bool AskSelectedQuestion()
+    {
+        if (interviewFinished)
+        {
+            Debug.LogWarning(
+                "La entrevista ya termino."
+            );
+            return false;
+        }
+
+        if (!interviewReady)
+        {
+            Debug.LogWarning(
+                "La entrevista todavia no esta lista."
+            );
+            return false;
+        }
+
+        if (questionInProgress)
+        {
+            Debug.LogWarning(
+                "Ya hay una pregunta en progreso."
+            );
+            return false;
+        }
+
+        if (questions.Count == 0)
+        {
+            Debug.LogWarning(
+                "No hay preguntas configuradas."
+            );
+            return false;
+        }
+
+        InterviewQuestion selectedQuestion =
+            questions[selectedQuestionIndex];
+
+        if (selectedQuestion.audioClip == null)
+        {
+            Debug.LogWarning(
+                "La pregunta "
+                + selectedQuestion.id
+                + " no tiene AudioClip asignado."
+            );
+
+            return false;
+        }
+
+        StartCoroutine(
+            AskQuestion(selectedQuestion)
+        );
+
+        return true;
+    }
+
+    // ============================================================
+    // TERMINAR RESPUESTA
+    // ============================================================
+
+    public void FinishCurrentAnswer()
+    {
+        if (!questionInProgress)
+        {
+            Debug.LogWarning(
+                "No hay una pregunta en progreso."
+            );
+            return;
+        }
+
+        if (!isRecording)
+        {
+            Debug.LogWarning(
+                "Todavia no se esta grabando una respuesta."
+            );
+            return;
+        }
+
+        finishAnswerRequested = true;
+
+        Debug.Log(
+            "El operador solicito terminar la respuesta."
+        );
+    }
+
+    // ============================================================
+    // GETTERS PARA LA UI
+    // ============================================================
+
+    public InterviewQuestion GetSelectedQuestion()
+    {
+        if (questions.Count == 0)
+        {
+            return null;
+        }
+
+        return questions[selectedQuestionIndex];
+    }
+
+    public int GetQuestionCount()
+    {
+        return questions.Count;
+    }
+
+    public bool IsQuestionInProgress()
+    {
+        return questionInProgress;
+    }
+
+    public bool IsInterviewReady()
+    {
+        return interviewReady && !interviewFinished;
+    }
+
+    public bool IsIntroductionFinished()
+    {
+        return introductionFinished;
+    }
+
+    public bool IsRecording()
+    {
+        return isRecording;
+    }
+
+    // ============================================================
+    // INTRODUCCION
+    // ============================================================
+
+    private IEnumerator RunIntroduction(
+        Interview interview
+    )
+    {
+        List<InterviewStep> steps =
+            interview.getSteps();
 
         foreach (InterviewStep step in steps)
         {
-            AudioClip clip = step.getAudioClip();
+            if (interviewFinished)
+            {
+                yield break;
+            }
+
+            AudioClip clip =
+                step.getAudioClip();
 
             if (clip != null)
             {
-                PlaySmoothAnimations(GetRandomAnimation(talkingAnimations));
+                PlaySmoothAnimations(
+                    GetRandomAnimation(
+                        talkingAnimations
+                    )
+                );
+
                 FixInterviewerTransform();
 
                 audioSource.clip = clip;
                 audioSource.Play();
 
-                yield return new WaitForSeconds(clip.length);
+                yield return new WaitForSeconds(
+                    clip.length
+                );
+
+                if (interviewFinished)
+                {
+                    yield break;
+                }
 
                 audioSource.Stop();
                 audioSource.clip = null;
             }
             else
             {
-                PlaySmoothAnimations(GetRandomAnimation(listeningAnimations));
-                FixInterviewerTransform();
-
-                Debug.Log(
-                    "Introduccion terminada. Esperando a que todos esten listos... " +
-                    "Presiona ESPACIO o ENTER para comenzar la entrevista."
+                PlaySmoothAnimations(
+                    GetRandomAnimation(
+                        listeningAnimations
+                    )
                 );
 
-                while (!(Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.Return)))
+                FixInterviewerTransform();
+
+                introductionFinished = true;
+
+                Debug.Log(
+                    "Introduccion terminada. "
+                    + "Esperando al operador."
+                );
+
+                // La UI ahora habilita el mismo boton
+                // como INICIAR ENTREVISTA.
+                OnIntroductionFinished?.Invoke();
+
+                // Ya NO esperamos Enter ni Space.
+                while (!startInterviewRequested)
                 {
+                    if (interviewFinished)
+                    {
+                        yield break;
+                    }
+
                     yield return null;
                 }
             }
         }
 
-        interviewReady = true;
-
-        Debug.Log("========================================");
-        Debug.Log("     LISTA DE CONTROLES PARA EL OPERADOR     "); 
-        Debug.Log("========================================");
-        Debug.Log("Flecha ARRIBA / ABAJO = cambiar pregunta");
-        Debug.Log("ENTER = hacer pregunta seleccionada");
-        Debug.Log("ESPACIO = terminar respuesta del participante");
-        Debug.Log("ESC = terminar entrevista");
-        Debug.Log("========================================");
-
-        PrintQuestionList();
-        PrintSelectedQuestion();
-    }
-
-    // Reproduce una pregunta elegida por el operador y despues graba la respuesta.
-    private IEnumerator AskQuestion(InterviewQuestion question)
-    {
-        questionInProgress = true;
-
-        Debug.Log("----------------------------------------");
-        Debug.Log("PREGUNTA " + question.id + ": " + question.shortDescription);
-
-        if (!string.IsNullOrWhiteSpace(question.fullQuestion))
+        if (interviewFinished)
         {
-            Debug.Log("Texto completo: " + question.fullQuestion);
+            yield break;
         }
 
-        // El entrevistador habla.
-        PlaySmoothAnimations(GetRandomAnimation(talkingAnimations));
+        interviewReady = true;
+
+        Debug.Log(
+            "========================================"
+        );
+
+        Debug.Log(
+            "ENTREVISTA INICIADA"
+        );
+
+        Debug.Log(
+            "========================================"
+        );
+
+        PrintQuestionList();
+
+        OnInterviewReady?.Invoke();
+    }
+
+    // ============================================================
+    // FLUJO DE PREGUNTA
+    // ============================================================
+
+    private IEnumerator AskQuestion(
+        InterviewQuestion question
+    )
+    {
+        questionInProgress = true;
+        finishAnswerRequested = false;
+
+        // Estado UI -> PREGUNTANDO
+        OnQuestionStarted?.Invoke();
+
+        Debug.Log(
+            "----------------------------------------"
+        );
+
+        Debug.Log(
+            "PREGUNTA "
+            + question.id
+            + ": "
+            + question.shortDescription
+        );
+
+        if (
+            !string.IsNullOrWhiteSpace(
+                question.fullQuestion
+            )
+        )
+        {
+            Debug.Log(
+                "Texto completo: "
+                + question.fullQuestion
+            );
+        }
+
+        // ========================================================
+        // ENTREVISTADORA HABLANDO
+        // ========================================================
+
+        PlaySmoothAnimations(
+            GetRandomAnimation(
+                talkingAnimations
+            )
+        );
+
         FixInterviewerTransform();
 
-        audioSource.clip = question.audioClip;
+        audioSource.clip =
+            question.audioClip;
+
         audioSource.Play();
 
-        yield return new WaitForSeconds(question.audioClip.length);
+        yield return new WaitForSeconds(
+            question.audioClip.length
+        );
+
+        if (interviewFinished)
+        {
+            yield break;
+        }
 
         audioSource.Stop();
         audioSource.clip = null;
 
-        // El entrevistador pasa a escuchar.
-        PlaySmoothAnimations(GetRandomAnimation(listeningAnimations));
+        // ========================================================
+        // ENTREVISTADORA ESCUCHANDO
+        // ========================================================
+
+        PlaySmoothAnimations(
+            GetRandomAnimation(
+                listeningAnimations
+            )
+        );
+
         FixInterviewerTransform();
 
-        // Inicia la grabacion de la respuesta.
+        // ========================================================
+        // GRABACION
+        // ========================================================
+
         if (Microphone.devices.Length == 0)
         {
-            Debug.LogWarning("No se encontro ningun microfono. No se grabara la respuesta.");
+            Debug.LogWarning(
+                "No se encontro ningun microfono. "
+                + "No se grabara la respuesta."
+            );
         }
         else
         {
-            currentRecordDevice = Microphone.devices[0];
+            currentRecordDevice =
+                Microphone.devices[0];
 
-            recordSource.clip = Microphone.Start(
-                currentRecordDevice,
-                true,
-                maxWait + 1,
-                44100
-            );
+            recordSource.clip =
+                Microphone.Start(
+                    currentRecordDevice,
+                    true,
+                    maxWait + 1,
+                    44100
+                );
 
             isRecording = true;
 
-            Debug.Log("Grabando respuesta... Presiona ESPACIO para terminar.");
+            // Estado UI -> RESPONDIENDO
+            OnAnswerStarted?.Invoke();
+
+            Debug.Log(
+                "Grabando respuesta..."
+            );
 
             float elapsedTime = 0f;
 
-            // Se conserva un maximo para evitar una grabacion infinita,
-            // pero el operador puede terminarla antes con ESPACIO.
-            while (!Input.GetKeyDown(KeyCode.Space) && elapsedTime < maxWait)
+            while (
+                !finishAnswerRequested &&
+                !Input.GetKeyDown(KeyCode.Space) &&
+                elapsedTime < maxWait
+            )
             {
-                elapsedTime += Time.deltaTime;
+                if (interviewFinished)
+                {
+                    yield break;
+                }
+
+                elapsedTime +=
+                    Time.deltaTime;
+
                 yield return null;
             }
 
-            Microphone.End(currentRecordDevice);
+            if (
+                Microphone.IsRecording(
+                    currentRecordDevice
+                )
+            )
+            {
+                Microphone.End(
+                    currentRecordDevice
+                );
+            }
+
             isRecording = false;
 
-            SavWav.Save(
-                "Record_Answer_Q" + question.id + "_" + cont,
-                recordSource.clip
-            );
+            if (recordSource.clip != null)
+            {
+                SavWav.Save(
+                    "Record_Answer_Q"
+                    + question.id
+                    + "_"
+                    + cont,
+                    recordSource.clip
+                );
 
-            cont++;
+                cont++;
+            }
         }
+
+        // ========================================================
+        // PREGUNTA TERMINADA
+        // ========================================================
 
         question.alreadyAsked = true;
-        questionInProgress = false;
 
-        Debug.Log("Respuesta terminada. Selecciona la siguiente pregunta.");
+        questionInProgress = false;
+        finishAnswerRequested = false;
+
+        Debug.Log(
+            "Respuesta terminada. "
+            + "Lista para la siguiente pregunta."
+        );
+
         PrintQuestionList();
-        PrintSelectedQuestion();
+
+        // Actualiza lista [ ] -> [X]
+        OnQuestionFinished?.Invoke();
     }
 
-    // Muestra todas las preguntas de forma legible para el operador.
+    // ============================================================
+    // LISTA
+    // ============================================================
+
     private void PrintQuestionList()
     {
-        Debug.Log("========== LISTA DE PREGUNTAS ==========");
+        Debug.Log(
+            "========== LISTA DE PREGUNTAS =========="
+        );
 
-        for (int i = 0; i < questions.Count; i++)
+        foreach (
+            InterviewQuestion question
+            in questions
+        )
         {
-            InterviewQuestion question = questions[i];
-            string usedMark = question.alreadyAsked ? "[X]" : "[ ]";
+            string usedMark =
+                question.alreadyAsked
+                    ? "[X]"
+                    : "[ ]";
 
             Debug.Log(
-                usedMark + " " +
-                question.id + " - " +
-                question.shortDescription
+                usedMark
+                + " "
+                + question.id
+                + " - "
+                + question.shortDescription
             );
         }
 
-        Debug.Log("=========================================");
+        Debug.Log(
+            "========================================="
+        );
     }
 
-    // Muestra la pregunta sobre la que esta parado actualmente el selector.
     private void PrintSelectedQuestion()
     {
         if (questions.Count == 0)
         {
-            Debug.LogWarning(
-                "No hay preguntas configuradas. Agregalas en el Inspector " +
-                "dentro de InterviewController > Questions."
-            );
             return;
         }
 
-        InterviewQuestion question = questions[selectedQuestionIndex];
+        InterviewQuestion question =
+            questions[selectedQuestionIndex];
 
         Debug.Log(
-            "> SELECTED: " +
-            question.id + " - " +
-            question.shortDescription
+            "> SELECTED: "
+            + question.id
+            + " - "
+            + question.shortDescription
         );
     }
 
-    // Corrige la posicion y orientacion del modelo despues de cambiar animacion.
+    // ============================================================
+    // ANIMACIONES
+    // ============================================================
+
     private void FixInterviewerTransform()
-        {
-            interviewerTransform.position = originalPosition + new Vector3(0, 0.15f, 0);
-            interviewerTransform.rotation = originalRotation * Quaternion.Euler(0, 90, 0);
-        }
-
-        // Obtiene una animacion aleatoria segun el estado.
-        private string GetRandomAnimation(string[] animations)
-        {
-            string animation = animations[Random.Range(0, animations.Length)];
-            Debug.Log("current animation: " + animation);
-            return animation;
-        }
-
-        // Suaviza la transicion entre animaciones.
-        private void PlaySmoothAnimations(string animationName)
     {
-        int layerIndex = 0;
-        int stateHash = Animator.StringToHash(animationName);
-
-        if (animator.HasState(layerIndex, stateHash))
+        if (interviewerTransform == null)
         {
-            animator.CrossFade(stateHash, 0.35f, layerIndex);
+            return;
+        }
+
+        interviewerTransform.position =
+            originalPosition
+            + new Vector3(
+                0,
+                0.15f,
+                0
+            );
+
+        interviewerTransform.rotation =
+            originalRotation
+            * Quaternion.Euler(
+                0,
+                90,
+                0
+            );
+    }
+
+    private string GetRandomAnimation(
+        string[] animations
+    )
+    {
+        return animations[
+            UnityEngine.Random.Range(
+                0,
+                animations.Length
+            )
+        ];
+    }
+
+    private void PlaySmoothAnimations(
+        string animationName
+    )
+    {
+        if (animator == null)
+        {
+            return;
+        }
+
+        int layerIndex = 0;
+
+        int stateHash =
+            Animator.StringToHash(
+                animationName
+            );
+
+        if (
+            animator.HasState(
+                layerIndex,
+                stateHash
+            )
+        )
+        {
+            animator.CrossFade(
+                stateHash,
+                0.35f,
+                layerIndex
+            );
         }
         else
         {
             Debug.LogWarning(
-                "No existe la animación: " + animationName
+                "No existe la animacion: "
+                + animationName
             );
         }
     }
-    private void EndInterview()
+
+    // ============================================================
+    // TERMINAR ENTREVISTA
+    // ============================================================
+
+    public void EndInterview()
     {
-        // Evita ejecutarlo dos veces.
         if (interviewFinished)
         {
             return;
         }
 
         interviewFinished = true;
+        interviewReady = false;
+        questionInProgress = false;
+        finishAnswerRequested = true;
 
-        Debug.Log("========== ENTREVISTA TERMINADA ==========");
+        Debug.Log(
+            "========== ENTREVISTA TERMINADA =========="
+        );
 
-        // Detiene cualquier coroutine:
-        // intro, pregunta, espera de respuesta, etc.
         StopAllCoroutines();
 
-        // Detiene el audio del entrevistador.
         if (audioSource != null)
         {
             audioSource.Stop();
             audioSource.clip = null;
         }
 
-        // Si el participante estaba grabando una respuesta,
-        // detenemos correctamente el micrófono.
-        if (isRecording && !string.IsNullOrEmpty(currentRecordDevice))
+        if (
+            isRecording &&
+            !string.IsNullOrEmpty(
+                currentRecordDevice
+            )
+        )
         {
-            Microphone.End(currentRecordDevice);
+            if (
+                Microphone.IsRecording(
+                    currentRecordDevice
+                )
+            )
+            {
+                Microphone.End(
+                    currentRecordDevice
+                );
+            }
+
             isRecording = false;
 
-            Debug.Log("Grabación detenida porque terminó la entrevista.");
+            Debug.Log(
+                "Grabacion detenida porque termino la entrevista."
+            );
         }
 
-        // Dejamos al entrevistador en una animación de escucha/idle.
-        PlaySmoothAnimations(
-            GetRandomAnimation(listeningAnimations)
-        );
+        if (animator != null)
+        {
+            PlaySmoothAnimations(
+                GetRandomAnimation(
+                    listeningAnimations
+                )
+            );
+        }
 
-        Debug.Log("La sesión ha finalizado.");
-    }   
+        OnInterviewFinished?.Invoke();
+
+        Debug.Log(
+            "La sesion ha finalizado."
+        );
+    }
 }
